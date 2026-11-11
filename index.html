@@ -92,9 +92,10 @@
   <!-- ============ 设置页 ============ -->
   <section id="view-settings" class="view">
     <div class="form-block">
-      <label class="form-label">操作人姓名</label>
-      <input id="opInput" type="text" placeholder="例如：张三" maxlength="20">
-      <button id="btnSaveOp" class="btn btn-primary btn-block">保存</button>
+      <label class="form-label">当前账号</label>
+      <p id="acctInfo" class="hint"></p>
+      <button id="btnAddAcct" class="btn btn-outline btn-block">新增账号（共用手机时）</button>
+      <button id="btnLogout" class="btn btn-outline btn-block">退出登录 / 切换账号</button>
     </div>
     <div class="form-block">
       <label class="form-label">飞书同步 Webhook 地址</label>
@@ -121,6 +122,34 @@
 </nav>
 
 <div id="toast" class="toast hidden"></div>
+
+<!-- 登录 / 账号 -->
+<div id="authOverlay" class="auth hidden">
+  <div class="auth-card">
+    <h2>盘点助手</h2>
+    <p class="auth-sub" id="authSub">请输入密码继续</p>
+
+    <div id="authSetup" class="hidden">
+      <label class="form-label">姓名（操作人）</label>
+      <input id="authName" type="text" placeholder="例如：张三" maxlength="20" autocomplete="off">
+      <label class="form-label">设置密码</label>
+      <input id="authPin" type="password" inputmode="numeric" placeholder="至少 4 位" maxlength="20">
+      <label class="form-label">确认密码</label>
+      <input id="authPin2" type="password" inputmode="numeric" placeholder="再输一次" maxlength="20">
+      <button id="authSetupOk" class="btn btn-primary btn-block">创建账号并开始盘点</button>
+      <button id="authBack" class="btn btn-outline btn-block hidden">返回登录</button>
+    </div>
+
+    <div id="authLogin" class="hidden">
+      <label class="form-label">账号</label>
+      <select id="authUserSel"></select>
+      <label class="form-label">密码</label>
+      <input id="authPinInput" type="password" inputmode="numeric" placeholder="请输入密码" maxlength="20">
+      <button id="authLoginOk" class="btn btn-primary btn-block">登录</button>
+      <button id="authNewAcct" class="btn btn-outline btn-block">新建账号</button>
+    </div>
+  </div>
+</div>
 
 <!-- 编辑弹窗 -->
 <div id="editModal" class="modal hidden">

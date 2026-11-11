@@ -70,15 +70,20 @@ main { padding: 12px; max-width: 640px; margin: 0 auto; }
 .tag.acc { background: #722ed1; }
 
 /* 扫码区 */
-.reader-wrap { margin-bottom: 12px; }
+.reader-wrap { margin-bottom: 8px; }
 #reader {
-  width: 100%; border-radius: var(--radius); overflow: hidden;
-  background: #000; min-height: 240px;
+  width: 100%; height: 180px;
+  border-radius: var(--radius); overflow: hidden;
+  background: #000;
 }
-#reader video { border-radius: var(--radius); }
+#reader video {
+  width: 100% !important; height: 100% !important;
+  object-fit: cover; border-radius: var(--radius);
+}
+#reader canvas { display: none; }
 .scan-tip {
   text-align: center; color: var(--text-2);
-  font-size: 13px; padding: 8px 0 0;
+  font-size: 12px; padding: 4px 0 0;
 }
 
 /* 手动输入 */
@@ -206,4 +211,22 @@ input:focus { outline: 2px solid rgba(22,100,255,.35); border-color: var(--prima
 @media (min-width: 641px) {
   .modal { align-items: center; }
   .modal-body { border-radius: 16px; }
+}
+
+/* ===== 登录 / 账号 ===== */
+.auth {
+  position: fixed; inset: 0; z-index: 60;
+  background: #fff; display: flex; justify-content: center;
+  padding: 32px 24px calc(24px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+.auth-card { width: 100%; max-width: 360px; margin: auto; }
+.auth-card h2 { font-size: 24px; text-align: center; margin: 0 0 6px; }
+.auth-sub { text-align: center; color: var(--text-2); font-size: 14px; margin: 0 0 20px; }
+.auth .btn-block { margin-top: 12px; }
+select {
+  width: 100%; padding: 12px 14px; font-size: 16px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--card); color: var(--text);
+  appearance: none; -webkit-appearance: none;
 }

@@ -12,6 +12,48 @@ const Settings = {
   set(key, val) { localStorage.setItem('pd_' + key, val); },
 };
 
+/* ================= 账号 ================= */
+const Auth = {
+  list() {
+    try { return JSON.parse(localStorage.getItem('pd_accts') || '[]'); } catch { return []; }
+  },
+  save(list) { localStorage.setItem('pd_accts', JSON.stringify(list)); },
+  hash(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return h.toString(16) + '-' + s.length;
+  },
+  find(name) { return this.list().find((a) => a.name === name); },
+  add(name, pin) {
+    const list = this.list();
+    if (list.some((a) => a.name === name)) return false;
+    list.push({ name, pin: this.hash(pin), created: Date.now() });
+    this.save(list);
+    return true;
+  },
+  verify(name, pin) {
+    const a = this.find(name);
+    return !!a && a.pin === this.hash(pin);
+  },
+  touch(name) {
+    const list = this.list();
+    const a = list.find((x) => x.name === name);
+    if (a) { a.last = Date.now(); this.save(list); }
+  },
+  login(name) {
+    localStorage.setItem('pd_session', name);
+    Settings.set('operator', name);
+  },
+  logout() {
+    localStorage.removeItem('pd_session');
+    Settings.set('operator', '');
+  },
+  current() {
+    const s = localStorage.getItem('pd_session') || '';
+    return this.find(s) ? s : '';
+  },
+};
+
 /* ================= IndexedDB ================= */
 let db = null;
 function openDB() {
@@ -93,8 +135,9 @@ function lookupMaterial(raw) {
 /* ================= 盘点流程状态 ================= */
 const Flow = {
   location: Settings.get('location'),
-  step: 'code',        // code | batch | qty
+  step: 'code',        // code | code-confirm | batch | qty
   current: null,       // 当前正在录入的物料
+  pendingCode: '',     // 刚扫到、待确认的代号
   onScan: null,        // 当前扫码回调
 };
 
@@ -170,6 +213,7 @@ function renderStep() {
   const qtyForm = $('#qtyForm');
   manualBox.classList.add('hidden');
   qtyForm.classList.add('hidden');
+  if (!Auth.current()) { stopScanner(); return; }
 
   if (!Flow.location) {
     card.innerHTML = `
@@ -190,26 +234,80 @@ function renderStep() {
     $('#manualInput').placeholder = '或手动输入物料代号';
     $('#manualInput').value = '';
     startScanner(handleCodeScan, '对准物料代号条码');
+  } else if (Flow.step === 'code-confirm') {
+    card.innerHTML = `
+      <div class="step-dots"><i class="on"></i><i></i><i></i></div>
+      <p class="step-title">第 1 步 · 确认物料代号</p>
+      <p class="step-sub">扫错了可直接修改下方代号，或重新扫描</p>
+      <label class="form-label">物料代号</label>
+      <input id="codeEdit" type="text" value="${escapeHtml(Flow.pendingCode)}" autocomplete="off">
+      <div id="codePreview"></div>
+      <div class="btn-row">
+        <button id="btnCodeOk" class="btn btn-primary">确认，下一步</button>
+        <button id="btnCodeRescan" class="btn btn-outline">重新扫描</button>
+      </div>`;
+    const updPreview = () => {
+      const v = $('#codeEdit').value.trim();
+      if (!v) { $('#codePreview').innerHTML = ''; return; }
+      const m = lookupMaterial(v);
+      $('#codePreview').innerHTML = m
+        ? foundCardHtml(m)
+        : `<div class="found-card warn"><div class="row"><span>提示</span><b>物料表中未找到，将按原样记录</b></div></div>`;
+    };
+    updPreview();
+    $('#codeEdit').addEventListener('input', updPreview);
+    $('#codeEdit').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btnCodeOk').click(); });
+    $('#btnCodeOk').onclick = () => {
+      const v = $('#codeEdit').value.trim();
+      if (!v) { toast('请输入物料代号'); return; }
+      const m = lookupMaterial(v);
+      Flow.current = m ? { ...m, code: v } : { code: v, codeType: '未知', sap: '', acc: '', desc: '' };
+      Flow.step = 'batch';
+      renderStep();
+    };
+    $('#btnCodeRescan').onclick = () => { Flow.step = 'code'; Flow.pendingCode = ''; renderStep(); };
   } else if (Flow.step === 'batch') {
     const c = Flow.current;
     card.innerHTML = `
       <div class="step-dots"><i class="on"></i><i class="on"></i><i></i></div>
-      <p class="step-title">第 2 步 · 扫描批次条码</p>
+      <p class="step-title">第 2 步 · 扫描或输入批次</p>
       ${foundCardHtml(c)}
+      <label class="form-label">批次</label>
+      <input id="batchEdit" type="text" value="${escapeHtml(c.batch || '')}" placeholder="扫码自动填入，也可直接修改" autocomplete="off">
       <div class="btn-row">
-        <button class="btn btn-outline btn-small" id="btnRescanCode">重扫代号</button>
+        <button id="btnBatchOk" class="btn btn-primary">确认，下一步</button>
+        <button id="btnBackCode" class="btn btn-outline">← 改代号</button>
       </div>`;
-    $('#btnRescanCode').onclick = () => { Flow.step = 'code'; Flow.current = null; renderStep(); };
-    manualBox.classList.remove('hidden');
-    $('#manualInput').placeholder = '或手动输入批次号';
-    $('#manualInput').value = '';
+    $('#batchEdit').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btnBatchOk').click(); });
+    $('#btnBatchOk').onclick = () => {
+      const v = $('#batchEdit').value.trim();
+      if (!v) { toast('请输入批次'); return; }
+      Flow.current.batch = v;
+      Flow.step = 'qty';
+      renderStep();
+    };
+    $('#btnBackCode').onclick = () => {
+      Flow.pendingCode = Flow.current.code;
+      Flow.step = 'code-confirm';
+      renderStep();
+    };
     startScanner(handleBatchScan, '对准批次条码');
   } else if (Flow.step === 'qty') {
     stopScanner();
     const c = Flow.current;
     card.innerHTML = `
       <div class="step-dots"><i class="on"></i><i class="on"></i><i class="on"></i></div>
-      <p class="step-title">第 3 步 · 输入数量</p>`;
+      <p class="step-title">第 3 步 · 输入数量</p>
+      <div class="btn-row btn-row-sm">
+        <button id="btnEditCode2" class="btn btn-outline btn-small">改代号</button>
+        <button id="btnEditBatch2" class="btn btn-outline btn-small">改批次</button>
+      </div>`;
+    $('#btnEditCode2').onclick = () => {
+      Flow.pendingCode = Flow.current.code;
+      Flow.step = 'code-confirm';
+      renderStep();
+    };
+    $('#btnEditBatch2').onclick = () => { Flow.step = 'batch'; renderStep(); };
     qtyForm.classList.remove('hidden');
     $('#summaryCard').innerHTML = `
       <div class="row"><span>物料代号</span><b>${c.code}（${c.codeType}）</b></div>
@@ -255,25 +353,12 @@ function handleLocationScan(text) {
   renderStep();
 }
 async function handleCodeScan(text) {
-  const m = lookupMaterial(text);
+  const v = text.trim();
+  if (!v) return;
   await stopScanner();
-  if (m && (m.desc || m.sap)) {
-    Flow.current = { ...m };
-    Flow.step = 'batch';
-    renderStep();
-  } else if (m) {
-    // SAP格式但不在表中
-    Flow.current = { ...m };
-    Flow.step = 'batch';
-    renderStep();
-    toast('该代号不在物料表中，描述为空');
-  } else {
-    // 完全不认识，询问是否仍作为代号使用
-    Flow.current = { code: text.trim(), codeType: '未知', sap: '', acc: '', desc: '' };
-    Flow.step = 'batch';
-    renderStep();
-    toast('未识别的代号，已按原样记录');
-  }
+  Flow.pendingCode = v;
+  Flow.step = 'code-confirm';
+  renderStep();
 }
 async function handleBatchScan(text) {
   if (!text.trim()) return;
@@ -567,15 +652,85 @@ async function switchView(id) {
   if (id === 'view-export') renderExportStats();
 }
 
+/* ================= 账号界面 ================= */
+function showAuth() {
+  $('#authOverlay').classList.remove('hidden');
+  if (!Auth.list().length) showSetup(false);
+  else showLogin();
+}
+function showSetup(isNew) {
+  $('#authLogin').classList.add('hidden');
+  $('#authSetup').classList.remove('hidden');
+  $('#authBack').classList.toggle('hidden', !isNew);
+  $('#authSub').textContent = isNew ? '新建一个盘点账号' : '首次使用，请创建账号';
+  $('#authName').value = '';
+  $('#authPin').value = '';
+  $('#authPin2').value = '';
+  setTimeout(() => $('#authName').focus(), 100);
+}
+function showLogin() {
+  const list = Auth.list();
+  $('#authSetup').classList.add('hidden');
+  $('#authLogin').classList.remove('hidden');
+  const sel = $('#authUserSel');
+  sel.innerHTML = list.map((a) => `<option value="${escapeHtml(a.name)}">${escapeHtml(a.name)}</option>`).join('');
+  const last = localStorage.getItem('pd_last_user');
+  if (last && list.some((a) => a.name === last)) sel.value = last;
+  $('#authSub').textContent = '请输入密码继续';
+  $('#authPinInput').value = '';
+  setTimeout(() => $('#authPinInput').focus(), 100);
+}
+function unlockApp() {
+  const name = Auth.current();
+  $('#opBadge').textContent = name;
+  $('#acctInfo').textContent = '当前账号：' + name;
+  $('#authOverlay').classList.add('hidden');
+  renderStep();
+  renderTodayStats();
+}
+function bindAuth() {
+  $('#authSetupOk').onclick = () => {
+    const name = $('#authName').value.trim();
+    const p1 = $('#authPin').value.trim();
+    const p2 = $('#authPin2').value.trim();
+    if (!name) { toast('请输入姓名'); return; }
+    if (p1.length < 4) { toast('密码至少 4 位'); return; }
+    if (p1 !== p2) { toast('两次输入的密码不一致'); return; }
+    if (Auth.find(name)) { toast('该姓名已存在，请直接登录'); showLogin(); return; }
+    Auth.add(name, p1);
+    Auth.login(name);
+    localStorage.setItem('pd_last_user', name);
+    unlockApp();
+    toast(`欢迎，${name}`);
+  };
+  $('#authBack').onclick = () => showLogin();
+  $('#authLoginOk').onclick = () => {
+    const name = $('#authUserSel').value;
+    const pin = $('#authPinInput').value.trim();
+    if (!Auth.verify(name, pin)) { toast('密码错误'); return; }
+    Auth.login(name);
+    Auth.touch(name);
+    localStorage.setItem('pd_last_user', name);
+    unlockApp();
+  };
+  $('#authPinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#authLoginOk').click(); });
+  $('#authNewAcct').onclick = () => showSetup(true);
+  $('#btnLogout').onclick = () => {
+    if (!confirm('确定退出当前账号？')) return;
+    Auth.logout();
+    stopScanner();
+    Flow.step = 'code'; Flow.current = null; Flow.pendingCode = '';
+    showAuth();
+  };
+  $('#btnAddAcct').onclick = () => { $('#authOverlay').classList.remove('hidden'); showSetup(true); };
+}
+
 /* ================= 初始化 ================= */
 async function init() {
   await openDB();
   await loadMaterials();
+  bindAuth();
 
-  // 操作人
-  const op = Settings.get('operator');
-  $('#opBadge').textContent = op || '点我设置操作人';
-  $('#opInput').value = op;
   $('#webhookInput').value = Settings.get('webhook');
 
   // 库位恢复
@@ -618,12 +773,6 @@ async function init() {
       await dbClear(); renderExportStats(); renderTodayStats(); toast('已清空');
     }
   };
-  $('#btnSaveOp').onclick = () => {
-    const v = $('#opInput').value.trim();
-    Settings.set('operator', v);
-    $('#opBadge').textContent = v || '点我设置操作人';
-    toast('已保存');
-  };
   $('#btnSaveWebhook').onclick = () => {
     Settings.set('webhook', $('#webhookInput').value.trim());
     toast('已保存');
@@ -637,8 +786,8 @@ async function init() {
     toast('已恢复内置物料表');
   };
 
-  renderStep();
-  renderTodayStats();
+  if (Auth.current()) unlockApp();
+  else showAuth();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
