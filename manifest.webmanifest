@@ -1,0 +1,16 @@
+{
+  "name": "盘点助手",
+  "short_name": "盘点助手",
+  "description": "手机扫码盘点：扫库位、物料代号、批次，登记数量，导出表格",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f6f7",
+  "theme_color": "#1664ff",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
