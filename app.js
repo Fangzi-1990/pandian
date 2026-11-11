@@ -13,8 +13,24 @@ const Settings = {
 };
 
 /* ================= 账号 ================= */
+let presetAccounts = [];   // 来自 data/账号名单.json 的固定账号
+async function loadPresetAccounts() {
+  const files = ['data/账号名单.json', 'data/accounts.json'];
+  for (const f of files) {
+    try {
+      const res = await fetch(f, { cache: 'no-cache' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      presetAccounts = (data.accounts || [])
+        .filter((a) => a && a.name && a.password != null)
+        .map((a) => ({ name: String(a.name).trim(), pin: String(a.password) }));
+      return;
+    } catch {}
+  }
+}
+
 const Auth = {
-  list() {
+  local() {
     try { return JSON.parse(localStorage.getItem('pd_accts') || '[]'); } catch { return []; }
   },
   save(list) { localStorage.setItem('pd_accts', JSON.stringify(list)); },
@@ -23,20 +39,29 @@ const Auth = {
     for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
     return h.toString(16) + '-' + s.length;
   },
+  /* 预置账号优先，本机临时账号补充在后（同名以预置为准） */
+  list() {
+    const names = new Set(presetAccounts.map((a) => a.name));
+    return [
+      ...presetAccounts.map((a) => ({ name: a.name, pin: a.pin, preset: true })),
+      ...this.local().filter((a) => !names.has(a.name)),
+    ];
+  },
   find(name) { return this.list().find((a) => a.name === name); },
   add(name, pin) {
-    const list = this.list();
-    if (list.some((a) => a.name === name)) return false;
+    const list = this.local();
+    if (this.list().some((a) => a.name === name)) return false;
     list.push({ name, pin: this.hash(pin), created: Date.now() });
     this.save(list);
     return true;
   },
   verify(name, pin) {
     const a = this.find(name);
-    return !!a && a.pin === this.hash(pin);
+    if (!a) return false;
+    return a.preset ? a.pin === pin : a.pin === this.hash(pin);
   },
   touch(name) {
-    const list = this.list();
+    const list = this.local();
     const a = list.find((x) => x.name === name);
     if (a) { a.last = Date.now(); this.save(list); }
   },
@@ -132,7 +157,7 @@ function lookupMaterial(raw) {
   return null;
 }
 
-/* ================= 盘点流程状态 ================= */
+/* ================= 录入流程状态 ================= */
 const Flow = {
   location: Settings.get('location'),
   step: 'code',        // code | batch | qty
@@ -217,7 +242,7 @@ function renderStep() {
   if (!Flow.location) {
     card.innerHTML = `
       <p class="step-title">请先扫描库位二维码</p>
-      <p class="step-sub">盘点前需要确定所在库位（如 AC102、R103）</p>`;
+      <p class="step-sub">录入前需要确定所在库位（如 AC102、R103）</p>`;
     manualBox.classList.remove('hidden');
     $('#manualInput').placeholder = '或手动输入库位编号';
     startScanner(handleLocationScan, '对准库位二维码');
@@ -401,7 +426,7 @@ async function renderTodayStats() {
   const all = await dbAll();
   const today = new Date().toDateString();
   const n = all.filter((r) => new Date(r.time).toDateString() === today).length;
-  $('#todayStats').textContent = `今日已盘点 ${n} 条 · 本机共 ${all.length} 条`;
+  $('#todayStats').textContent = `今日已录入 ${n} 条 · 本机共 ${all.length} 条`;
 }
 
 /* ================= 清单页 ================= */
@@ -439,7 +464,18 @@ function applyListFilter() {
   box.querySelectorAll('.act-del').forEach((b) =>
     b.addEventListener('click', async (e) => {
       const id = +e.target.closest('.record-card').dataset.id;
-      if (confirm('确定删除这条记录？')) { await dbDel(id); renderList(); renderTodayStats(); }
+      if (!confirm('确定删除这条记录？')) return;
+      const rec = listCache.find((x) => x.id === id);
+      await dbDel(id);
+      renderList(); renderTodayStats();
+      if (rec) {
+        const { id: _omit, ...rest } = rec;
+        toastWithUndo('已删除', async () => {
+          await dbAdd(rest);
+          renderList(); renderTodayStats();
+          toast('已恢复该记录');
+        });
+      }
     }));
 }
 function formatTime(iso) {
@@ -485,7 +521,7 @@ const EXPORT_COLS = [
   ['SAP代号', 'sap'], ['ACCPAC代号', 'acc'], ['描述', 'desc'],
   ['批次', 'batch'], ['数量', 'qty'], ['单位', 'unit'],
   ['保质期至', 'exp'], ['生产日期', 'mfg'],
-  ['盘点时间', (r) => { const d = new Date(r.time); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }],
+  ['录入时间', (r) => { const d = new Date(r.time); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }],
   ['操作人', 'operator'],
 ];
 function buildSheetRows(records) {
@@ -499,12 +535,12 @@ async function exportFile(type) {
   const aoa = buildSheetRows(all);
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
-  const fname = `盘点_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+  const fname = `录入_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
   if (type === 'xlsx') {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = aoa[0].map((_, i) => ({ wch: Math.max(10, ...aoa.map((row) => String(row[i] ?? '').length)) }));
-    XLSX.utils.book_append_sheet(wb, ws, '盘点记录');
+    XLSX.utils.book_append_sheet(wb, ws, '录入记录');
     XLSX.writeFile(wb, fname + '.xlsx');
   } else {
     const csv = '﻿' + aoa.map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -519,6 +555,75 @@ function downloadBlob(blob, fname) {
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+/* ================= 备份 / 恢复 ================= */
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+}
+async function backupAll(silent) {
+  const records = await dbAll();
+  const payload = {
+    type: 'pandian-backup',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    operator: Auth.current(),
+    location: Settings.get('location'),
+    webhook: Settings.get('webhook'),
+    materialsCustom: localStorage.getItem('pd_materials_custom') || null,
+    records,
+  };
+  downloadBlob(
+    new Blob([JSON.stringify(payload)], { type: 'application/json' }),
+    `数据备份_${stamp()}_${records.length}条.json`
+  );
+  Settings.set('lastBackup', new Date().toISOString());
+  if (!silent) toast(`已备份 ${records.length} 条记录，请把文件存到网盘或发给自己`);
+}
+async function restoreBackup(file) {
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    toast('文件无法解析，请选择 .json 备份文件');
+    return;
+  }
+  if (!data || data.type !== 'pandian-backup' || !Array.isArray(data.records)) {
+    toast('不是本 APP 的备份文件');
+    return;
+  }
+  const hasLocal = (await dbAll()).length > 0;
+  let merge = false;
+  if (hasLocal) {
+    merge = confirm(
+      `本机已有记录。\n\n点「确定」= 合并（保留本机记录，追加备份文件中的记录）\n点「取消」= 覆盖（清空本机后恢复备份）`
+    );
+  }
+  if (!merge && hasLocal) {
+    if (!confirm('覆盖会清空本机现有全部记录，确定吗？')) return;
+    await dbClear();
+  }
+  const existKey = new Set(
+    (await dbAll()).map((r) => [r.time, r.code, r.batch, r.location, r.qty, r.unit].join('|'))
+  );
+  let added = 0;
+  for (const rec of data.records) {
+    const key = [rec.time, rec.code, rec.batch, rec.location, rec.qty, rec.unit].join('|');
+    if (existKey.has(key)) continue;
+    existKey.add(key);
+    const { id, ...rest } = rec;
+    await dbAdd(rest);
+    added++;
+  }
+  if (data.materialsCustom) localStorage.setItem('pd_materials_custom', data.materialsCustom);
+  if (data.webhook) { Settings.set('webhook', data.webhook); $('#webhookInput').value = data.webhook; }
+  if (data.location) { Flow.location = data.location; Settings.set('location', data.location); $('#locText').textContent = data.location; $('#locBanner').classList.add('set'); $('#locBanner').classList.remove('unset'); }
+  await loadMaterials();
+  renderExportStats();
+  renderList();
+  toast(`恢复完成：新增 ${added} 条（备份共 ${data.records.length} 条）`, 4000);
 }
 async function copyToClipboard() {
   const all = (await dbAll()).sort((a, b) => (a.time < b.time ? -1 : 1));
@@ -620,7 +725,7 @@ function showSetup(isNew) {
   $('#authLogin').classList.add('hidden');
   $('#authSetup').classList.remove('hidden');
   $('#authBack').classList.toggle('hidden', !isNew);
-  $('#authSub').textContent = isNew ? '新建一个盘点账号' : '首次使用，请创建账号';
+  $('#authSub').textContent = isNew ? '新建一个录入账号' : '首次使用，请创建账号';
   $('#authName').value = '';
   $('#authPin').value = '';
   $('#authPin2').value = '';
@@ -645,6 +750,20 @@ function unlockApp() {
   $('#authOverlay').classList.add('hidden');
   renderStep();
   renderTodayStats();
+  maybeRemindBackup();
+}
+async function maybeRemindBackup() {
+  const all = await dbAll();
+  if (!all.length) return;
+  const today = new Date().toDateString();
+  const last = Settings.get('lastBackup');
+  const reminded = Settings.get('lastRemind');
+  if (last && new Date(last).toDateString() === today) return;
+  if (reminded && new Date(reminded).toDateString() === today) return;
+  Settings.set('lastRemind', new Date().toISOString());
+  setTimeout(() => {
+    toast(`今天还没备份：已有 ${all.length} 条记录，建议到「导出」页点「备份全部数据」`, 6000);
+  }, 1500);
 }
 function bindAuth() {
   $('#authSetupOk').onclick = () => {
@@ -687,6 +806,7 @@ function bindAuth() {
 async function init() {
   await openDB();
   await loadMaterials();
+  await loadPresetAccounts();
   bindAuth();
 
   $('#webhookInput').value = Settings.get('webhook');
@@ -727,10 +847,24 @@ async function init() {
   $('#btnCopy').onclick = copyToClipboard;
   $('#btnSync').onclick = syncToFeishu;
   $('#btnClear').onclick = async () => {
-    if (confirm('确定清空全部盘点记录？此操作不可恢复！')) {
-      await dbClear(); renderExportStats(); renderTodayStats(); toast('已清空');
-    }
+    const all = await dbAll();
+    if (!all.length) { toast('没有记录'); return; }
+    const cur = Auth.current();
+    const pin = prompt(`清空会删除本机全部 ${all.length} 条记录。\n\n请输入账号「${cur}」的密码确认：`);
+    if (pin === null) return;
+    if (!Auth.verify(cur, pin)) { toast('密码错误，已取消'); return; }
+    await backupAll(true);
+    await dbClear();
+    renderExportStats(); renderTodayStats();
+    toast('已清空，并自动下载了一份备份文件', 4000);
   };
+  $('#btnBackup').onclick = () => backupAll(false);
+  $('#btnRestore').onclick = () => $('#restoreFile').click();
+  $('#restoreFile').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (f) restoreBackup(f);
+    e.target.value = '';
+  });
   $('#btnSaveWebhook').onclick = () => {
     Settings.set('webhook', $('#webhookInput').value.trim());
     toast('已保存');
@@ -746,6 +880,11 @@ async function init() {
 
   if (Auth.current()) unlockApp();
   else showAuth();
+
+  // 请求持久化存储，降低浏览器自动清理本地数据的概率
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

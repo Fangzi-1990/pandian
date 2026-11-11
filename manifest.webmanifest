@@ -1,7 +1,7 @@
 {
-  "name": "盘点助手",
-  "short_name": "盘点助手",
-  "description": "手机扫码盘点：扫库位、物料代号、批次，登记数量，导出表格",
+  "name": "现场录入助手",
+  "short_name": "现场录入助手",
+  "description": "手机扫码录入：扫库位、物料代号、批次，登记数量，导出表格",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

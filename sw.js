@@ -1,4 +1,4 @@
-const CACHE = 'pandian-v4';
+const CACHE = 'pandian-v8';
 const ASSETS = [
   './',
   './index.html',
@@ -6,6 +6,7 @@ const ASSETS = [
   './app.js',
   './manifest.webmanifest',
   './data/materials.json',
+  './data/账号名单.json',
   './vendor/html5-qrcode.min.js',
   './vendor/xlsx.full.min.js',
   './icons/icon-192.png',
