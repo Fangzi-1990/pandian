@@ -150,6 +150,8 @@ input:focus { outline: 2px solid rgba(22,100,255,.35); border-color: var(--prima
 .record-card .desc { font-size: 13px; margin-top: 2px; }
 .record-card .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; color: var(--text-2); }
 .record-card .ops button { margin-left: 8px; font-size: 13px; padding: 4px 12px; }
+.record-card.voided { opacity: .55; }
+#btnVoided.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 .sync-dot.yes { background: var(--success); }
 .sync-dot.no { background: #fa8c16; }

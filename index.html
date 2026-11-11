@@ -71,6 +71,10 @@
       <span id="listCount"></span>
       <input id="listFilter" type="search" placeholder="筛选：代号/批次/库位">
     </div>
+    <div class="list-toolbar">
+      <button id="btnVoided" class="btn btn-outline btn-small">回收站（0）</button>
+      <button id="btnPurge" class="btn btn-danger btn-small hidden">彻底清空回收站</button>
+    </div>
     <div id="recordList" class="record-list"></div>
   </section>
 
@@ -136,9 +140,9 @@
       <label class="form-label">姓名（操作人）</label>
       <input id="authName" type="text" placeholder="例如：张三" maxlength="20" autocomplete="off">
       <label class="form-label">设置密码</label>
-      <input id="authPin" type="password" inputmode="numeric" placeholder="至少 4 位" maxlength="20">
+      <input id="authPin" type="password" placeholder="至少 4 位，可含字母数字" maxlength="32">
       <label class="form-label">确认密码</label>
-      <input id="authPin2" type="password" inputmode="numeric" placeholder="再输一次" maxlength="20">
+      <input id="authPin2" type="password" placeholder="再输一次" maxlength="32">
       <button id="authSetupOk" class="btn btn-primary btn-block">创建账号并开始录入</button>
       <p class="hint center">预置账号见 data/账号名单.json；本机新建的账号在清理浏览器数据后会丢失</p>
       <button id="authBack" class="btn btn-outline btn-block hidden">返回登录</button>
@@ -148,7 +152,7 @@
       <label class="form-label">账号</label>
       <select id="authUserSel"></select>
       <label class="form-label">密码</label>
-      <input id="authPinInput" type="password" inputmode="numeric" placeholder="请输入密码" maxlength="20">
+      <input id="authPinInput" type="password" placeholder="请输入密码" maxlength="32">
       <button id="authLoginOk" class="btn btn-primary btn-block">登录</button>
       <button id="authNewAcct" class="btn btn-outline btn-block">新建账号</button>
     </div>

@@ -1,5 +1,6 @@
 {
-  "说明": "【现场录入账号名单】在这里增删账号，改完保存并上传覆盖本文件即可生效。name=姓名，password=密码。预置账号清除浏览器数据后依然存在。",
+  "说明": "【现场录入账号名单】accounts 里增删账号：name=姓名，password=密码。adminPassword=管理员密码，删除记录和清空数据时必须输入它，请只告诉负责人。改完保存并上传覆盖本文件即可生效。",
+  "adminPassword": "admin888",
   "accounts": [
     { "name": "张三", "password": "zs2024" },
     { "name": "李四", "password": "ls2024" },

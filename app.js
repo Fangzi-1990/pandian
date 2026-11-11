@@ -14,6 +14,7 @@ const Settings = {
 
 /* ================= 账号 ================= */
 let presetAccounts = [];   // 来自 data/账号名单.json 的固定账号
+let presetAdminPin = '';   // 管理员密码：删除记录 / 清空数据时校验
 async function loadPresetAccounts() {
   const files = ['data/账号名单.json', 'data/accounts.json'];
   for (const f of files) {
@@ -21,12 +22,19 @@ async function loadPresetAccounts() {
       const res = await fetch(f, { cache: 'no-cache' });
       if (!res.ok) continue;
       const data = await res.json();
+      presetAdminPin = data.adminPassword ? String(data.adminPassword) : '';
       presetAccounts = (data.accounts || [])
         .filter((a) => a && a.name && a.password != null)
         .map((a) => ({ name: String(a.name).trim(), pin: String(a.password) }));
       return;
     } catch {}
   }
+}
+
+/* 管理员密码校验：配置了 adminPassword 就用它，否则退回当前账号密码 */
+function checkAdminPin(pin) {
+  if (presetAdminPin) return pin === presetAdminPin;
+  return Auth.verify(Auth.current(), pin);
 }
 
 const Auth = {
@@ -423,7 +431,7 @@ function toastWithUndo(msg, onUndo) {
 
 /* ================= 统计 ================= */
 async function renderTodayStats() {
-  const all = await dbAll();
+  const all = (await dbAll()).filter((r) => !r.voided);
   const today = new Date().toDateString();
   const n = all.filter((r) => new Date(r.time).toDateString() === today).length;
   $('#todayStats').textContent = `今日已录入 ${n} 条 · 本机共 ${all.length} 条`;
@@ -431,20 +439,25 @@ async function renderTodayStats() {
 
 /* ================= 清单页 ================= */
 let listCache = [];
+let showVoided = false;   // 是否查看回收站（已作废记录）
 async function renderList() {
   listCache = (await dbAll()).sort((a, b) => (a.time < b.time ? 1 : -1));
+  const bin = listCache.filter((r) => r.voided).length;
+  $('#btnVoided').textContent = `回收站（${bin}）`;
+  $('#btnPurge').classList.toggle('hidden', !showVoided || !bin);
   applyListFilter();
 }
 function applyListFilter() {
   const kw = $('#listFilter').value.trim().toLowerCase();
+  const base = listCache.filter((r) => (showVoided ? r.voided : !r.voided));
   const rows = kw
-    ? listCache.filter((r) =>
+    ? base.filter((r) =>
         [r.code, r.batch, r.location, r.desc].some((f) => (f || '').toLowerCase().includes(kw)))
-    : listCache;
-  $('#listCount').textContent = `共 ${rows.length} 条`;
+    : base;
+  $('#listCount').textContent = showVoided ? `回收站 ${rows.length} 条` : `共 ${rows.length} 条`;
   const box = $('#recordList');
   box.innerHTML = rows.map((r) => `
-    <div class="record-card" data-id="${r.id}">
+    <div class="record-card${r.voided ? ' voided' : ''}" data-id="${r.id}">
       <div class="top">
         <span class="code">${escapeHtml(r.code)}</span>
         <span class="qty">${r.qty} ${escapeHtml(r.unit)}</span>
@@ -454,28 +467,38 @@ function applyListFilter() {
       <div class="foot">
         <span><i class="sync-dot ${r.synced ? 'yes' : 'no'}"></i>${r.synced ? '已同步' : '未同步'} · ${formatTime(r.time)} · ${escapeHtml(r.operator)}</span>
         <span class="ops">
-          <button class="btn btn-outline act-edit">编辑</button>
-          <button class="btn btn-danger act-del">删除</button>
+          ${r.voided
+            ? '<button class="btn btn-outline act-restore">恢复</button>'
+            : '<button class="btn btn-outline act-edit">编辑</button><button class="btn btn-danger act-del">作废</button>'}
         </span>
       </div>
     </div>`).join('');
   box.querySelectorAll('.act-edit').forEach((b) =>
     b.addEventListener('click', (e) => openEdit(+e.target.closest('.record-card').dataset.id)));
+  box.querySelectorAll('.act-restore').forEach((b) =>
+    b.addEventListener('click', async (e) => {
+      const id = +e.target.closest('.record-card').dataset.id;
+      const rec = listCache.find((x) => x.id === id);
+      if (!rec) return;
+      const { voided, voidedAt, ...keep } = rec;
+      await dbPut(keep);
+      await renderList(); renderTodayStats(); renderExportStats();
+      toast('已恢复到清单');
+    }));
   box.querySelectorAll('.act-del').forEach((b) =>
     b.addEventListener('click', async (e) => {
       const id = +e.target.closest('.record-card').dataset.id;
-      if (!confirm('确定删除这条记录？')) return;
       const rec = listCache.find((x) => x.id === id);
-      await dbDel(id);
-      renderList(); renderTodayStats();
-      if (rec) {
-        const { id: _omit, ...rest } = rec;
-        toastWithUndo('已删除', async () => {
-          await dbAdd(rest);
-          renderList(); renderTodayStats();
-          toast('已恢复该记录');
-        });
-      }
+      if (!rec) return;
+      // 软删除：只标记作废，数据仍在本机，可从回收站恢复
+      await dbPut({ ...rec, voided: 1, voidedAt: Date.now() });
+      await renderList(); renderTodayStats(); renderExportStats();
+      toastWithUndo('已移入回收站，数据不会丢失', async () => {
+        const { voided: _v, voidedAt: _t, ...back } = rec;
+        await dbPut(back);
+        await renderList(); renderTodayStats(); renderExportStats();
+        toast('已恢复该记录');
+      });
     }));
 }
 function formatTime(iso) {
@@ -530,7 +553,7 @@ function buildSheetRows(records) {
   return [head, ...rows];
 }
 async function exportFile(type) {
-  const all = (await dbAll()).sort((a, b) => (a.time < b.time ? -1 : 1));
+  const all = (await dbAll()).filter((r) => !r.voided).sort((a, b) => (a.time < b.time ? -1 : 1));
   if (!all.length) { toast('没有可导出的记录'); return; }
   const aoa = buildSheetRows(all);
   const d = new Date();
@@ -626,7 +649,7 @@ async function restoreBackup(file) {
   toast(`恢复完成：新增 ${added} 条（备份共 ${data.records.length} 条）`, 4000);
 }
 async function copyToClipboard() {
-  const all = (await dbAll()).sort((a, b) => (a.time < b.time ? -1 : 1));
+  const all = (await dbAll()).filter((r) => !r.voided).sort((a, b) => (a.time < b.time ? -1 : 1));
   if (!all.length) { toast('没有记录'); return; }
   const text = buildSheetRows(all).map((row) => row.join('\t')).join('\n');
   try {
@@ -641,7 +664,7 @@ async function copyToClipboard() {
 async function syncToFeishu() {
   const url = Settings.get('webhook');
   if (!url) { toast('请先在「设置」里填写 Webhook 地址'); switchView('view-settings'); return; }
-  const unsynced = (await dbAll()).filter((r) => !r.synced);
+  const unsynced = (await dbAll()).filter((r) => !r.synced && !r.voided);
   if (!unsynced.length) { toast('没有未同步的记录'); return; }
   toast(`正在同步 ${unsynced.length} 条…`, 4000);
   let ok = 0, fail = 0;
@@ -664,7 +687,7 @@ async function syncToFeishu() {
 
 /* ================= 导出页统计 ================= */
 async function renderExportStats() {
-  const all = await dbAll();
+  const all = (await dbAll()).filter((r) => !r.voided);
   const today = new Date().toDateString();
   $('#statTotal').textContent = all.length;
   $('#statUnsync').textContent = all.filter((r) => !r.synced).length;
@@ -847,16 +870,29 @@ async function init() {
   $('#btnCopy').onclick = copyToClipboard;
   $('#btnSync').onclick = syncToFeishu;
   $('#btnClear').onclick = async () => {
-    const all = await dbAll();
+    const all = (await dbAll()).filter((r) => !r.voided);
     if (!all.length) { toast('没有记录'); return; }
-    const cur = Auth.current();
-    const pin = prompt(`清空会删除本机全部 ${all.length} 条记录。\n\n请输入账号「${cur}」的密码确认：`);
-    if (pin === null) return;
-    if (!Auth.verify(cur, pin)) { toast('密码错误，已取消'); return; }
     await backupAll(true);
-    await dbClear();
-    renderExportStats(); renderTodayStats();
-    toast('已清空，并自动下载了一份备份文件', 4000);
+    const now = Date.now();
+    for (const r of all) await dbPut({ ...r, voided: 1, voidedAt: now });
+    showVoided = false;
+    await renderList(); renderExportStats(); renderTodayStats();
+    toast('已全部移入回收站（数据未删除，可在清单页「回收站」恢复），并已自动下载备份', 6000);
+  };
+  $('#btnVoided').onclick = () => {
+    showVoided = !showVoided;
+    renderList();
+  };
+  $('#btnPurge').onclick = async () => {
+    const bin = (await dbAll()).filter((r) => r.voided);
+    if (!bin.length) { toast('回收站是空的'); return; }
+    const pin = prompt(`彻底清空回收站会永久删除 ${bin.length} 条记录，无法恢复。\n\n请输入管理员密码确认：`);
+    if (pin === null) return;
+    if (!checkAdminPin(pin.trim())) { toast('管理员密码错误，已取消'); return; }
+    await backupAll(true);
+    for (const r of bin) await dbDel(r.id);
+    await renderList(); renderExportStats(); renderTodayStats();
+    toast('回收站已彻底清空，并已自动下载备份', 4000);
   };
   $('#btnBackup').onclick = () => backupAll(false);
   $('#btnRestore').onclick = () => $('#restoreFile').click();
