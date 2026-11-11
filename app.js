@@ -135,9 +135,8 @@ function lookupMaterial(raw) {
 /* ================= 盘点流程状态 ================= */
 const Flow = {
   location: Settings.get('location'),
-  step: 'code',        // code | code-confirm | batch | qty
+  step: 'code',        // code | batch | qty
   current: null,       // 当前正在录入的物料
-  pendingCode: '',     // 刚扫到、待确认的代号
   onScan: null,        // 当前扫码回调
 };
 
@@ -157,10 +156,10 @@ async function startScanner(onResult, tip) {
       { facingMode: 'environment' },
       {
         fps: 10,
-        qrbox: (w, h) => {
-          const width = Math.floor(Math.min(w, h) * 0.9);
-          return { width, height: Math.floor(width * 0.5) };
-        },
+        qrbox: (w, h) => ({
+          width: Math.floor(w * 0.94),
+          height: Math.floor(h * 0.62),
+        }),
         formatsToSupport: [
           Html5QrcodeSupportedFormats.QR_CODE,
           Html5QrcodeSupportedFormats.CODE_128,
@@ -234,63 +233,19 @@ function renderStep() {
     $('#manualInput').placeholder = '或手动输入物料代号';
     $('#manualInput').value = '';
     startScanner(handleCodeScan, '对准物料代号条码');
-  } else if (Flow.step === 'code-confirm') {
-    card.innerHTML = `
-      <div class="step-dots"><i class="on"></i><i></i><i></i></div>
-      <p class="step-title">第 1 步 · 确认物料代号</p>
-      <p class="step-sub">扫错了可直接修改下方代号，或重新扫描</p>
-      <label class="form-label">物料代号</label>
-      <input id="codeEdit" type="text" value="${escapeHtml(Flow.pendingCode)}" autocomplete="off">
-      <div id="codePreview"></div>
-      <div class="btn-row">
-        <button id="btnCodeOk" class="btn btn-primary">确认，下一步</button>
-        <button id="btnCodeRescan" class="btn btn-outline">重新扫描</button>
-      </div>`;
-    const updPreview = () => {
-      const v = $('#codeEdit').value.trim();
-      if (!v) { $('#codePreview').innerHTML = ''; return; }
-      const m = lookupMaterial(v);
-      $('#codePreview').innerHTML = m
-        ? foundCardHtml(m)
-        : `<div class="found-card warn"><div class="row"><span>提示</span><b>物料表中未找到，将按原样记录</b></div></div>`;
-    };
-    updPreview();
-    $('#codeEdit').addEventListener('input', updPreview);
-    $('#codeEdit').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btnCodeOk').click(); });
-    $('#btnCodeOk').onclick = () => {
-      const v = $('#codeEdit').value.trim();
-      if (!v) { toast('请输入物料代号'); return; }
-      const m = lookupMaterial(v);
-      Flow.current = m ? { ...m, code: v } : { code: v, codeType: '未知', sap: '', acc: '', desc: '' };
-      Flow.step = 'batch';
-      renderStep();
-    };
-    $('#btnCodeRescan').onclick = () => { Flow.step = 'code'; Flow.pendingCode = ''; renderStep(); };
   } else if (Flow.step === 'batch') {
     const c = Flow.current;
     card.innerHTML = `
       <div class="step-dots"><i class="on"></i><i class="on"></i><i></i></div>
-      <p class="step-title">第 2 步 · 扫描或输入批次</p>
+      <p class="step-title">第 2 步 · 扫描批次条码</p>
       ${foundCardHtml(c)}
-      <label class="form-label">批次</label>
-      <input id="batchEdit" type="text" value="${escapeHtml(c.batch || '')}" placeholder="扫码自动填入，也可直接修改" autocomplete="off">
       <div class="btn-row">
-        <button id="btnBatchOk" class="btn btn-primary">确认，下一步</button>
-        <button id="btnBackCode" class="btn btn-outline">← 改代号</button>
+        <button id="btnBackCode" class="btn btn-outline btn-small">← 改代号</button>
       </div>`;
-    $('#batchEdit').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btnBatchOk').click(); });
-    $('#btnBatchOk').onclick = () => {
-      const v = $('#batchEdit').value.trim();
-      if (!v) { toast('请输入批次'); return; }
-      Flow.current.batch = v;
-      Flow.step = 'qty';
-      renderStep();
-    };
-    $('#btnBackCode').onclick = () => {
-      Flow.pendingCode = Flow.current.code;
-      Flow.step = 'code-confirm';
-      renderStep();
-    };
+    $('#btnBackCode').onclick = () => { Flow.step = 'code'; Flow.current = null; renderStep(); };
+    manualBox.classList.remove('hidden');
+    $('#manualInput').placeholder = '或手动输入批次号';
+    $('#manualInput').value = '';
     startScanner(handleBatchScan, '对准批次条码');
   } else if (Flow.step === 'qty') {
     stopScanner();
@@ -299,14 +254,10 @@ function renderStep() {
       <div class="step-dots"><i class="on"></i><i class="on"></i><i class="on"></i></div>
       <p class="step-title">第 3 步 · 输入数量</p>
       <div class="btn-row btn-row-sm">
-        <button id="btnEditCode2" class="btn btn-outline btn-small">改代号</button>
-        <button id="btnEditBatch2" class="btn btn-outline btn-small">改批次</button>
+        <button id="btnEditCode2" class="btn btn-outline btn-small">← 改代号</button>
+        <button id="btnEditBatch2" class="btn btn-outline btn-small">← 改批次</button>
       </div>`;
-    $('#btnEditCode2').onclick = () => {
-      Flow.pendingCode = Flow.current.code;
-      Flow.step = 'code-confirm';
-      renderStep();
-    };
+    $('#btnEditCode2').onclick = () => { Flow.step = 'code'; Flow.current = null; renderStep(); };
     $('#btnEditBatch2').onclick = () => { Flow.step = 'batch'; renderStep(); };
     qtyForm.classList.remove('hidden');
     $('#summaryCard').innerHTML = `
@@ -356,8 +307,15 @@ async function handleCodeScan(text) {
   const v = text.trim();
   if (!v) return;
   await stopScanner();
-  Flow.pendingCode = v;
-  Flow.step = 'code-confirm';
+  const m = lookupMaterial(v);
+  if (m) {
+    Flow.current = { ...m };
+    if (!m.desc) toast('该代号不在物料表中，描述为空');
+  } else {
+    Flow.current = { code: v, codeType: '未知', sap: '', acc: '', desc: '' };
+    toast('未识别的代号，已按原样记录');
+  }
+  Flow.step = 'batch';
   renderStep();
 }
 async function handleBatchScan(text) {
@@ -719,7 +677,7 @@ function bindAuth() {
     if (!confirm('确定退出当前账号？')) return;
     Auth.logout();
     stopScanner();
-    Flow.step = 'code'; Flow.current = null; Flow.pendingCode = '';
+    Flow.step = 'code'; Flow.current = null;
     showAuth();
   };
   $('#btnAddAcct').onclick = () => { $('#authOverlay').classList.remove('hidden'); showSetup(true); };
