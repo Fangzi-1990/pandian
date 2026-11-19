@@ -1,4 +1,4 @@
-const CACHE = 'pandian-v11';
+const CACHE = 'pandian-v13';
 const ASSETS = [
   './',
   './index.html',

@@ -180,12 +180,14 @@ let lastScan = { text: '', at: 0 };
 let camTrack = null;
 let camCaps = {};
 let torchOn = false;
+let lastScanCfg = null;
 
 async function startScanner(onResult, tip) {
   await stopScanner();
   Flow.onScan = onResult;
+  lastScanCfg = { onResult, tip };
   $('#readerWrap').classList.remove('hidden');
-  $('#scanTip').textContent = tip || '条码占画面一半以上，距标签约 10~15cm';
+  $('#scanTip').textContent = (tip || '对准条码') + ' · 10~15cm';
   try {
     if (!scanner) {
       scanner = new Html5Qrcode('reader', {
@@ -297,6 +299,7 @@ async function stopScanner() {
 }
 
 function bindCamTools() {
+  $('#btnSnap').onclick = snapDecode;
   $('#btnTorch').onclick = async () => {
     if (!camTrack || !camCaps.torch) return;
     torchOn = !torchOn;
@@ -309,6 +312,103 @@ function bindCamTools() {
     if (!camTrack || !camCaps.zoom) return;
     try { await camTrack.applyConstraints({ advanced: [{ zoom: +e.target.value }] }); } catch {}
   };
+}
+/* ============ 拍照识别（小码兜底） ============ */
+async function snapDecode() {
+  const video = document.querySelector('#reader video');
+  if (!video || !video.videoWidth) { toast('摄像头还没准备好，请稍等'); return; }
+  const cfg = lastScanCfg;
+  const W = video.videoWidth, H = video.videoHeight;
+  const full = document.createElement('canvas');
+  full.width = W; full.height = H;
+  full.getContext('2d').drawImage(video, 0, 0, W, H);
+
+  await stopScanner();
+  $('#readerWrap').classList.remove('hidden');
+  $('#scanTip').textContent = `正在识别（${W}×${H}）…`;
+
+  const text = await decodeCanvasVariants(full);
+  if (text) {
+    beep();
+    if (navigator.vibrate) navigator.vibrate(80);
+    if (Flow.onScan) Flow.onScan(text.trim());
+    return;
+  }
+  toast('这张没识别出来：靠近到 8~10cm、稍微倾斜避开反光再试', 4500);
+  if (cfg) await startScanner(cfg.onResult, cfg.tip);
+}
+
+/* 同一张图生成多种候选：原图、放大 2 倍、放大+灰度增强 */
+async function decodeCanvasVariants(src) {
+  const tries = [
+    { ratio: 1, scale: 1, gray: false },
+    { ratio: 0.92, scale: 2, gray: false },
+    { ratio: 0.92, scale: 2, gray: true },
+  ];
+  for (const t of tries) {
+    const canvas = cropScale(src, t.ratio, t.scale, t.gray);
+    const text = await decodeOne(canvas);
+    if (text) return text;
+  }
+  return '';
+}
+
+function cropScale(src, ratio, scale, gray) {
+  const sw = Math.floor(src.width * ratio);
+  const sh = Math.floor(src.height * ratio);
+  const sx = Math.floor((src.width - sw) / 2);
+  const sy = Math.floor((src.height - sh) / 2);
+  let outW = Math.floor(sw * scale);
+  if (outW > 2600) outW = 2600;
+  const k = outW / sw;
+  const c = document.createElement('canvas');
+  c.width = outW;
+  c.height = Math.max(1, Math.floor(sh * k));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  if (gray) {
+    try {
+      const img = ctx.getImageData(0, 0, c.width, c.height);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        let g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        g = g < 110 ? 0 : g > 170 ? 255 : g;   // 增强黑白对比
+        d[i] = d[i + 1] = d[i + 2] = g;
+      }
+      ctx.putImageData(img, 0, 0);
+    } catch {}
+  }
+  return c;
+}
+
+async function decodeOne(canvas) {
+  // 1) 系统原生识别（安卓 Chrome 支持，准确率高）
+  if ('BarcodeDetector' in window) {
+    try {
+      const det = new window.BarcodeDetector();
+      const res = await det.detect(canvas);
+      if (res && res.length) return res[0].rawValue;
+    } catch {}
+  }
+  // 2) 退回本地解码库
+  try {
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+    if (!blob) return '';
+    const file = new File([blob], 'snap.png', { type: 'image/png' });
+    const el = document.createElement('div');
+    el.id = 'snapReader';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    const q = new Html5Qrcode('snapReader', { verbose: false });
+    const txt = await q.scanFile(file, false);
+    try { q.clear(); } catch {}
+    el.remove();
+    return txt || '';
+  } catch {
+    return '';
+  }
 }
 function beep() {
   try {
@@ -332,8 +432,8 @@ function renderStep() {
 
   if (!Flow.location) {
     card.innerHTML = `
-      <p class="step-title">请先扫描库位二维码</p>
-      <p class="step-sub">录入前需要确定所在库位（如 AC102、R103）</p>`;
+      <div class="step-line"><span class="step-num">1</span>请先扫描库位二维码</div>
+      <div class="desc-line"><span class="desc-text">确定所在库位后才能录入，如 AC102</span></div>`;
     manualBox.classList.remove('hidden');
     $('#manualInput').placeholder = '或手动输入库位编号';
     startScanner(handleLocationScan, '对准库位二维码');
@@ -342,9 +442,7 @@ function renderStep() {
 
   if (Flow.step === 'code') {
     card.innerHTML = `
-      <div class="step-dots"><i class="on"></i><i></i><i></i></div>
-      <p class="step-title">第 1 步 · 扫描物料代号条码</p>
-      <p class="step-sub">优先扫 SAP 物料代号（8位数字）；标签上没有 SAP 就扫 Accpac 代号</p>`;
+      <div class="step-line"><span class="step-num">1</span>扫描物料代号<span class="step-tag">SAP 优先 · 8位数字</span></div>`;
     manualBox.classList.remove('hidden');
     $('#manualInput').placeholder = '或手动输入物料代号';
     $('#manualInput').value = '';
@@ -352,13 +450,14 @@ function renderStep() {
   } else if (Flow.step === 'batch') {
     const c = Flow.current;
     card.innerHTML = `
-      <div class="step-dots"><i class="on"></i><i class="on"></i><i></i></div>
-      <p class="step-title">第 2 步 · 扫描批次条码</p>
-      ${foundCardHtml(c)}
-      <div class="btn-row">
-        <button id="btnBackCode" class="btn btn-outline btn-small">← 改代号</button>
+      <div class="step-line"><span class="step-num">2</span>扫描批次<span class="code-chip">${escapeHtml(c.code)}</span></div>
+      <div class="desc-line">
+        <span class="desc-text${c.desc ? '' : ' warn-text'}">${c.desc ? escapeHtml(c.desc) : '物料表中未找到，请核对代号'}</span>
+        <button id="btnBackCode" class="link-btn">改代号</button>
       </div>`;
     $('#btnBackCode').onclick = () => { Flow.step = 'code'; Flow.current = null; renderStep(); };
+    const descEl = card.querySelector('.desc-text');
+    if (descEl) descEl.onclick = () => descEl.classList.toggle('expanded');
     manualBox.classList.remove('hidden');
     $('#manualInput').placeholder = '或手动输入批次号';
     $('#manualInput').value = '';
@@ -367,11 +466,11 @@ function renderStep() {
     stopScanner();
     const c = Flow.current;
     card.innerHTML = `
-      <div class="step-dots"><i class="on"></i><i class="on"></i><i class="on"></i></div>
-      <p class="step-title">第 3 步 · 输入数量</p>
-      <div class="btn-row btn-row-sm">
-        <button id="btnEditCode2" class="btn btn-outline btn-small">← 改代号</button>
-        <button id="btnEditBatch2" class="btn btn-outline btn-small">← 改批次</button>
+      <div class="step-line"><span class="step-num">3</span>输入数量
+        <span class="step-tag">
+          <button id="btnEditCode2" class="link-btn">改代号</button>
+          <button id="btnEditBatch2" class="link-btn">改批次</button>
+        </span>
       </div>`;
     $('#btnEditCode2').onclick = () => { Flow.step = 'code'; Flow.current = null; renderStep(); };
     $('#btnEditBatch2').onclick = () => { Flow.step = 'batch'; renderStep(); };
@@ -388,14 +487,6 @@ function renderStep() {
     selectUnit('KG');
     setTimeout(() => $('#qtyInput').focus(), 100);
   }
-}
-function foundCardHtml(c, warn) {
-  return `
-    <div class="found-card${warn ? ' warn' : ''}">
-      <div class="row"><span>代号</span><b>${escapeHtml(c.code)} <span class="tag${c.codeType === 'ACCPAC' ? ' acc' : ''}">${c.codeType}</span></b></div>
-      ${c.sap && c.codeType === 'ACCPAC' ? `<div class="row"><span>对应SAP</span><b>${escapeHtml(c.sap)}</b></div>` : ''}
-      <div class="row"><span>描述</span><b>${c.desc ? escapeHtml(c.desc) : '<span style="color:#fa8c16">物料表中未找到，请手动补充</span>'}</b></div>
-    </div>`;
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -517,7 +608,10 @@ async function renderTodayStats() {
   const all = (await dbAll()).filter((r) => !r.voided);
   const today = new Date().toDateString();
   const n = all.filter((r) => new Date(r.time).toDateString() === today).length;
-  $('#todayStats').textContent = `今日已录入 ${n} 条 · 本机共 ${all.length} 条`;
+  const last = all.slice().sort((a, b) => (a.time < b.time ? 1 : -1))[0];
+  const left = last ? `上一条 ${last.code}${last.batch ? ' · ' + last.batch : ''}` : '还没有记录';
+  $('#todayStats').innerHTML =
+    `<span>${escapeHtml(left)}</span><span>今日 ${n} 条 · 共 ${all.length} 条</span>`;
 }
 
 /* ================= 清单页 ================= */
