@@ -177,22 +177,28 @@ const Flow = {
 let scanner = null;
 let scannerRunning = false;
 let lastScan = { text: '', at: 0 };
+let camTrack = null;
+let camCaps = {};
+let torchOn = false;
 
 async function startScanner(onResult, tip) {
   await stopScanner();
   Flow.onScan = onResult;
   $('#readerWrap').classList.remove('hidden');
-  $('#scanTip').textContent = tip || '将条码对准取景框';
+  $('#scanTip').textContent = tip || '条码占画面一半以上，距标签约 10~15cm';
   try {
-    if (!scanner) scanner = new Html5Qrcode('reader', { verbose: false });
+    if (!scanner) {
+      scanner = new Html5Qrcode('reader', {
+        verbose: false,
+        // 优先调用系统原生识别，对小码、轻微模糊的容忍度更高
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      });
+    }
     await scanner.start(
       { facingMode: 'environment' },
       {
-        fps: 10,
-        qrbox: (w, h) => ({
-          width: Math.floor(w * 0.94),
-          height: Math.floor(h * 0.62),
-        }),
+        fps: 15,
+        // 不设 qrbox：整幅画面参与解码，避免小码被裁剪丢失像素
         formatsToSupport: [
           Html5QrcodeSupportedFormats.QR_CODE,
           Html5QrcodeSupportedFormats.CODE_128,
@@ -216,16 +222,93 @@ async function startScanner(onResult, tip) {
       () => {}
     );
     scannerRunning = true;
+    await tuneCamera();
   } catch (e) {
     $('#scanTip').textContent = '摄像头不可用：' + (e && e.message ? e.message : e) + '，请使用下方手动输入';
   }
 }
+
+/* 摄像头调优：高分辨率 + 连续对焦 + 补光 + 变焦 + 点击对焦 */
+async function tuneCamera() {
+  const video = document.querySelector('#reader video');
+  if (!video) return;
+  video.setAttribute('playsinline', 'true');
+  const stream = video.srcObject;
+  camTrack = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+  if (!camTrack) return;
+  camCaps = (camTrack.getCapabilities && camTrack.getCapabilities()) || {};
+
+  const advanced = [];
+  if (Array.isArray(camCaps.focusMode) && camCaps.focusMode.includes('continuous')) {
+    advanced.push({ focusMode: 'continuous' });
+  }
+  try {
+    await camTrack.applyConstraints({ width: { ideal: 1920 }, height: { ideal: 1080 }, advanced });
+  } catch {}
+
+  const hasTorch = !!camCaps.torch;
+  torchOn = false;
+  $('#btnTorch').classList.toggle('hidden', !hasTorch);
+  $('#btnTorch').classList.remove('on');
+
+  if (camCaps.zoom && camCaps.zoom.max > camCaps.zoom.min) {
+    const r = $('#zoomRange');
+    r.min = camCaps.zoom.min;
+    r.max = camCaps.zoom.max;
+    r.step = (camCaps.zoom.max - camCaps.zoom.min) / 20;
+    try { r.value = camTrack.getSettings().zoom || camCaps.zoom.min; } catch { r.value = camCaps.zoom.min; }
+    $('#zoomWrap').classList.remove('hidden');
+  } else {
+    $('#zoomWrap').classList.add('hidden');
+  }
+
+  video.onclick = async (e) => {
+    const box = video.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - box.top) / box.height));
+    try {
+      await camTrack.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }], focusMode: 'single-shot' }] });
+      toast('已对该点对焦');
+      setTimeout(() => {
+        camTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+      }, 1600);
+    } catch {
+      toast('该手机不支持点击对焦，请前后移动调整距离');
+    }
+  };
+  $('#btnTapFocus').classList.remove('hidden');
+}
+
 async function stopScanner() {
   $('#readerWrap').classList.add('hidden');
+  $('#btnTapFocus').classList.add('hidden');
+  $('#zoomWrap').classList.add('hidden');
+  $('#btnTorch').classList.add('hidden');
+  if (camTrack && torchOn) {
+    try { await camTrack.applyConstraints({ advanced: [{ torch: false }] }); } catch {}
+    torchOn = false;
+  }
+  camTrack = null;
+  camCaps = {};
   if (scanner && scannerRunning) {
     try { await scanner.stop(); } catch {}
     scannerRunning = false;
   }
+}
+
+function bindCamTools() {
+  $('#btnTorch').onclick = async () => {
+    if (!camTrack || !camCaps.torch) return;
+    torchOn = !torchOn;
+    try {
+      await camTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+      $('#btnTorch').classList.toggle('on', torchOn);
+    } catch { toast('该手机无法开启补光'); }
+  };
+  $('#zoomRange').oninput = async (e) => {
+    if (!camTrack || !camCaps.zoom) return;
+    try { await camTrack.applyConstraints({ advanced: [{ zoom: +e.target.value }] }); } catch {}
+  };
 }
 function beep() {
   try {
@@ -831,6 +914,7 @@ async function init() {
   await loadMaterials();
   await loadPresetAccounts();
   bindAuth();
+  bindCamTools();
 
   $('#webhookInput').value = Settings.get('webhook');
 
