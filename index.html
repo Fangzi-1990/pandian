@@ -58,11 +58,11 @@
         <input id="unitCustom" type="text" placeholder="其他单位" maxlength="8">
       </div>
       <details class="optional-block">
-        <summary>保质期 / 生产日期（选填）</summary>
-        <label class="form-label">保质期至</label>
-        <input id="expInput" type="date">
+        <summary>生产日期 / 保质期（选填）</summary>
         <label class="form-label">生产日期</label>
         <input id="mfgInput" type="date">
+        <label class="form-label">保质期至</label>
+        <input id="expInput" type="date">
       </details>
       <div class="btn-row">
         <button id="btnSaveNext" class="btn btn-primary btn-big">保存，继续下一件</button>
@@ -175,8 +175,8 @@
     <label class="form-label">批次</label><input id="editBatch" type="text">
     <label class="form-label">数量</label><input id="editQty" type="number" step="any" min="0">
     <label class="form-label">单位</label><input id="editUnit" type="text" maxlength="8">
-    <label class="form-label">保质期至</label><input id="editExp" type="date">
     <label class="form-label">生产日期</label><input id="editMfg" type="date">
+    <label class="form-label">保质期至</label><input id="editExp" type="date">
     <div class="btn-row">
       <button id="editSave" class="btn btn-primary">保存</button>
       <button id="editCancel" class="btn btn-outline">取消</button>
