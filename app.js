@@ -19,9 +19,11 @@ async function loadPresetAccounts() {
   const files = ['data/账号名单.json', 'data/accounts.json'];
   for (const f of files) {
     try {
-      const res = await fetch(f, { cache: 'no-cache' });
+      // 加时间戳 + no-store：确保每次打开都取到最新的账号名单，不被缓存挡掉
+      const res = await fetch(f + '?t=' + Date.now(), { cache: 'no-store' });
       if (!res.ok) continue;
-      const data = await res.json();
+      const text = (await res.text()).replace(/^\uFEFF/, '');
+      const data = JSON.parse(text);
       presetAdminPin = data.adminPassword ? String(data.adminPassword) : '';
       presetAccounts = (data.accounts || [])
         .filter((a) => a && a.name && a.password != null)
@@ -182,12 +184,44 @@ let camCaps = {};
 let torchOn = false;
 let lastScanCfg = null;
 
-async function startScanner(onResult, tip) {
-  await stopScanner();
+/* 扫码器启停串行化：避免上一步的停止还没完成就启动下一步，导致
+   「Cannot clear while scan is ongoing」而落到“摄像头不可用” */
+let scanChain = Promise.resolve();
+function enqueueScan(fn) {
+  const p = scanChain.then(fn, fn);
+  scanChain = p.catch(() => {});
+  return p;
+}
+
+function startScanner(onResult, tip) {
+  return enqueueScan(() => doStartScanner(onResult, tip));
+}
+
+/* 把浏览器抛出的英文摄像头错误翻译成现场人员看得懂的提示 */
+function describeCameraError(e) {
+  const name = (e && e.name) || '';
+  const msg = String((e && e.message) || e || '');
+  if (name === 'NotAllowedError' || /Permission|denied/i.test(msg)) {
+    return '摄像头权限被拒绝：请在浏览器地址栏左侧允许摄像头，或直接使用下方手动输入';
+  }
+  if (name === 'NotFoundError' || /no camera|Requested device not found/i.test(msg)) {
+    return '没有检测到摄像头，请使用下方手动输入';
+  }
+  if (name === 'NotReadableError' || /Could not start video|in use/i.test(msg)) {
+    return '摄像头被其他程序占用，关闭其他相机应用后重试，或用下方手动输入';
+  }
+  if (name === 'OverconstrainedError') {
+    return '当前设备不支持该摄像头参数，请刷新页面重试，或用下方手动输入';
+  }
+  return '摄像头无法启动，请刷新页面重试，或用下方手动输入';
+}
+
+async function doStartScanner(onResult, tip) {
+  await stopScannerNow();
   Flow.onScan = onResult;
   lastScanCfg = { onResult, tip };
   $('#readerWrap').classList.remove('hidden');
-  $('#scanTip').textContent = (tip || '对准条码') + ' · 10~15cm';
+  $('#scanTip').textContent = (tip || '对准条码') + ' · 让条码尽量占满框';
   try {
     if (!scanner) {
       scanner = new Html5Qrcode('reader', {
@@ -226,7 +260,10 @@ async function startScanner(onResult, tip) {
     scannerRunning = true;
     await tuneCamera();
   } catch (e) {
-    $('#scanTip').textContent = '摄像头不可用：' + (e && e.message ? e.message : e) + '，请使用下方手动输入';
+    scannerRunning = false;
+    try { if (scanner) await scanner.clear(); } catch {}
+    scanner = null;
+    $('#scanTip').textContent = describeCameraError(e);
   }
 }
 
@@ -258,7 +295,18 @@ async function tuneCamera() {
     r.min = camCaps.zoom.min;
     r.max = camCaps.zoom.max;
     r.step = (camCaps.zoom.max - camCaps.zoom.min) / 20;
-    try { r.value = camTrack.getSettings().zoom || camCaps.zoom.min; } catch { r.value = camCaps.zoom.min; }
+    let cur = camCaps.zoom.min;
+    try { cur = camTrack.getSettings().zoom || camCaps.zoom.min; } catch {}
+    // 自动放大到 2x：小二维码 / 小条码在画面里占的像素翻倍，识别率明显提升
+    let target = cur;
+    if (camCaps.zoom.min <= 1.05 && camCaps.zoom.max >= 2) target = 2;
+    if (target !== cur) {
+      try {
+        await camTrack.applyConstraints({ advanced: [{ zoom: target }] });
+      } catch { target = cur; }
+    }
+    r.value = target;
+    if (target > cur) $('#scanTip').textContent += ' · 已放大 ' + (Math.round(target * 10) / 10) + 'x';
     $('#zoomWrap').classList.remove('hidden');
   } else {
     $('#zoomWrap').classList.add('hidden');
@@ -281,7 +329,7 @@ async function tuneCamera() {
   $('#btnTapFocus').classList.remove('hidden');
 }
 
-async function stopScanner() {
+async function stopScannerNow() {
   $('#readerWrap').classList.add('hidden');
   $('#btnTapFocus').classList.add('hidden');
   $('#zoomWrap').classList.add('hidden');
@@ -292,10 +340,17 @@ async function stopScanner() {
   }
   camTrack = null;
   camCaps = {};
-  if (scanner && scannerRunning) {
-    try { await scanner.stop(); } catch {}
+  if (scanner) {
+    const withTimeout = (pr, ms) => Promise.race([pr.catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
+    try { if (scannerRunning) await withTimeout(scanner.stop(), 2000); } catch {}
     scannerRunning = false;
+    // 释放实例，下一步重新创建，避免复用导致的 clear 状态异常
+    try { await withTimeout(scanner.clear(), 1200); } catch {}
+    scanner = null;
   }
+}
+function stopScanner() {
+  return enqueueScan(() => stopScannerNow());
 }
 
 function bindCamTools() {
@@ -334,7 +389,7 @@ async function snapDecode() {
     if (Flow.onScan) Flow.onScan(text.trim());
     return;
   }
-  toast('这张没识别出来：靠近到 8~10cm、稍微倾斜避开反光再试', 4500);
+  toast('这张没识别出来：让条码占满取景框，或点画面手动对焦后再试', 4500);
   if (cfg) await startScanner(cfg.onResult, cfg.tip);
 }
 
@@ -500,10 +555,22 @@ function setLocation(loc) {
 }
 
 /* ================= 扫码回调 ================= */
+/* 从二维码/条码内容里提取库位号：
+   兼容「R101」「r101」「区位代码：R101」「库位: AC-102」「https://x?loc=R101」等写法 */
+function extractLocation(text) {
+  let s = String(text || '');
+  // 全角转半角
+  s = s.replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).toUpperCase();
+  const m = s.match(/[A-Z]{1,4}[\s\-_]*\d{2,4}/);
+  if (!m) return '';
+  const loc = m[0].replace(/[\s\-_]/g, '');
+  return /^[A-Z]{1,4}\d{2,4}$/.test(loc) ? loc : '';
+}
+
 function handleLocationScan(text) {
-  const loc = text.trim().toUpperCase();
-  if (!/^[A-Z]{1,4}\d{2,4}$/.test(loc)) {
-    toast(`「${loc}」不像库位编码（应为字母+数字，如 AC102），已忽略`);
+  const loc = extractLocation(text);
+  if (!loc) {
+    toast(`「${String(text).trim().slice(0, 20)}」不像库位编码（应为字母+数字，如 AC102），已忽略`);
     return;
   }
   setLocation(loc);

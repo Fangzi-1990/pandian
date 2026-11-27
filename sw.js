@@ -1,4 +1,4 @@
-const CACHE = 'pandian-v14';
+const CACHE = 'pandian-v19';
 const ASSETS = [
   './',
   './index.html',
@@ -6,7 +6,6 @@ const ASSETS = [
   './app.js',
   './manifest.webmanifest',
   './data/materials.json',
-  './data/账号名单.json',
   './vendor/html5-qrcode.min.js',
   './vendor/xlsx.full.min.js',
   './icons/icon-192.png',
@@ -30,6 +29,27 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // 飞书同步等外部请求不缓存
   if (url.origin !== self.location.origin) return;
+
+  // 账号名单：必须优先取网络最新版本，离线时退回上次缓存
+  if (url.pathname.endsWith('/data/账号名单.json') || url.pathname.endsWith('/data/accounts.json')) {
+    e.respondWith(
+      fetch(e.request, { cache: 'no-store' })
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(url.origin + url.pathname, copy));
+          }
+          return res;
+        })
+        .catch(() =>
+          caches.match(url.origin + url.pathname).then(
+            (hit) => hit || caches.match('./data/账号名单.json')
+          )
+        )
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
       const copy = res.clone();
