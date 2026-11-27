@@ -1,0 +1,23 @@
+{
+  "说明": "【现场录入账号名单】accounts 里增删账号：name=姓名，password=密码。adminPassword=管理员密码，删除记录和清空数据时必须输入它，请只告诉负责人。改完保存并上传覆盖本文件即可生效。",
+  "adminPassword": "admin888",
+  "accounts": [
+    { "name": "张三", "password": "zs0418" },
+    { "name": "张辉", "password": "zh0875" },
+    { "name": "顾作鹏", "password": "gzp2282" },
+    { "name": "徐子凯", "password": "xzk5426" },
+    { "name": "曲珏林", "password": "qjl4053" },
+    { "name": "赵煜策", "password": "zyc3510" },
+    { "name": "孙海全", "password": "shq9506" },
+    { "name": "毛林", "password": "ml2729" },
+    { "name": "时振凯", "password": "szk2955" },
+    { "name": "姜蒙", "password": "jm4865" },
+    { "name": "梁少龙", "password": "lsl6744" },
+    { "name": "王忠辉", "password": "wzh8162" },
+    { "name": "黄雨凡", "password": "hyf0886" },
+    { "name": "刘海涛", "password": "lht5815" },
+    { "name": "董春源", "password": "dcy5095" },
+    { "name": "谢玉龙", "password": "xyl7366" },
+    { "name": "林高鹏", "password": "lgp9538" }
+  ]
+}
